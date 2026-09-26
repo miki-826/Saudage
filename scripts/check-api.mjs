@@ -19,8 +19,17 @@ async function post(path, payload, expected = 200, extra = {}) {
   assert.equal(r.status, expected, JSON.stringify(data));
   return data;
 }
-let s = await post("/api/session", { action: "new", mode: "demo" });
-assert.equal(s.state.mode, "demo");
+await post("/api/session", { action: "new", mode: "demo" }, 400);
+const config = await fetch(base + "/api/config").then((r) => r.json());
+if (!config.ai) {
+  await post("/api/session", { action: "new", mode: "live" }, 503);
+  console.log(
+    "PASS: demo removed; missing API configuration blocks new games.",
+  );
+  process.exit(0);
+}
+let s = await post("/api/session", { action: "new", mode: "live" });
+assert.equal(s.state.mode, "live");
 const original = s.token;
 await post(
   "/api/session",
@@ -34,15 +43,17 @@ await post("/api/session", { action: "load", token: original }, 403, {
   Origin: "https://untrusted.example",
 });
 await post("/api/analyze", { token: original, message: "" }, 400);
-await post(
-  "/api/live",
-  { token: original, sdp: "fake-sdp-for-demo-check" },
-  400,
+await post("/api/memory", { token: original, action: "reveal" }, 400);
+assert.ok(
+  (await post("/api/memory", { token: original })).memories.every(
+    (m) => !m.unlocked,
+  ),
 );
 const defs = JSON.parse(
   await readFile(new URL("../story/memories.json", import.meta.url), "utf8"),
 );
 let turns = 0;
+let fallbacks = 0;
 for (const memory of defs) {
   for (let i = 0; i < 6; i++) {
     const message =
@@ -50,10 +61,12 @@ for (const memory of defs) {
       `。あの頃、そんな仕事や情景があったと思う。${i}つ目の場面はどう感じた？`;
     s = await post("/api/analyze", { token: s.token, message });
     turns++;
+    if (s.warning) fallbacks++;
     assert.ok(s.gain <= 100);
     if (s.state.memories.find((m) => m.id === memory.id).unlocked) break;
   }
 }
+console.log(`Analysis fallback turns: ${fallbacks}/${turns}`);
 assert.equal(s.state.completed, true);
 assert.equal(s.state.memories.filter((m) => m.unlocked).length, 5);
 assert.equal(
@@ -68,5 +81,5 @@ assert.equal(
   5,
 );
 console.log(
-  `PASS: ${turns} demo turns, five memories, ending, resume, local save, tamper/device/origin/input checks, demo voice rejection.`,
+  `PASS: ${turns} content-driven turns, five memories, ending, resume, local save, tamper/device/origin/input checks, removed demo and timed reveal rejection.`,
 );

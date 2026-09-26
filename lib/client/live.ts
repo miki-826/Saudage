@@ -11,8 +11,7 @@ export type LiveHandlers = {
   onClosed: () => void;
 };
 export type MicCheck =
-  | { ok: true }
-  | { ok: false; reason: MicReason; message: string };
+  { ok: true } | { ok: false; reason: MicReason; message: string };
 
 /** Microphone availability, checked without opening a stream where possible. */
 export async function checkMicrophone(): Promise<MicCheck> {
@@ -148,11 +147,13 @@ export class LiveConnection {
       audio.muted = false;
       peer.ontrack = (e) => {
         audio.srcObject = e.streams[0] ?? new MediaStream([e.track]);
-        void audio.play().catch(() =>
-          this.handlers.onNotice(
-            "ブラウザが自動再生を止めました。画面を一度タップすると彼女の声が聞こえます。",
-          ),
-        );
+        void audio
+          .play()
+          .catch(() =>
+            this.handlers.onNotice(
+              "ブラウザが自動再生を止めました。画面を一度タップすると彼女の声が聞こえます。",
+            ),
+          );
       };
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -376,7 +377,7 @@ export class LiveConnection {
   hint(text: string) {
     this.append(
       "session.commentary.append",
-      "会話が止まっています。次の手がかりを、あなた自身の言い方で短くつぶやいてください: " +
+      "次の手がかりを、自分の曖昧な感覚として一文だけつぶやいてください。質問や催促をせず、記憶が確定したとは言わないこと: " +
         text.slice(0, 300),
     );
   }

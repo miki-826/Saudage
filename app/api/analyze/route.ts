@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   advance,
-  directAnalysis,
   demoAnalyze,
   demoReply,
   characterPrompt,
@@ -51,10 +50,7 @@ export async function POST(request: Request) {
     if (state.mode === "live") requireAccess(request);
     let warning: string | null = null;
     let assessment;
-    const direct = directAnalysis(state, input.message);
-    if (direct) assessment = direct;
-    else if (state.mode === "demo")
-      assessment = demoAnalyze(state, input.message);
+    if (state.mode === "demo") assessment = demoAnalyze(state, input.message);
     else
       try {
         assessment = await analyze(state, input.message, input.signals ?? null);

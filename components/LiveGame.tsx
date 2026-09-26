@@ -24,9 +24,11 @@ import {
   HelpCircle,
   Keyboard,
   Ear,
+  LogOut,
 } from "lucide-react";
 import {
   memories,
+  conversationHint,
   suggestionsFor,
   tone,
   type GameState,
@@ -68,11 +70,6 @@ const defaults: Prefs = {
   code: "",
 };
 const saveKey = "live-save-v1";
-// The stall timer lives outside the component: reading the clock inside one is
-// flagged as impure even from an event handler.
-function markProgress(ref: { current: number }) {
-  ref.current = Date.now();
-}
 const guideKey = "live-guide-v1";
 // Shown in full before the first conversation starts, so nothing about the
 // controls has to be discovered by trial and error.
@@ -81,7 +78,7 @@ const GUIDE = [
     heading: "これは、思い出させる物語です。",
     lead: "彼女は記憶を失ったAIです。名前も、昨日も、自分が何をしていたのかも覚えていません。",
     points: [
-      "コンビニや接客など、記憶につながる話題を伝えると、記憶のかけらが開きます。",
+      "コンビニや接客などに近い意味の話題でも、AIが内容を読み取って記憶を開きます。順番は自由です。",
       "あなたが「どこにいたのか」「何をしていたのか」「誰と関わっていたのか」「どう感じていたのか」を語ると、彼女の中の記憶が刺激されます。",
       "5つの記憶がそろい、彼女が自分の言葉で「私はこういう存在だった」と語れたら、物語は終わります。",
     ],
@@ -113,7 +110,7 @@ const GUIDE = [
     points: [
       "同じ言葉を繰り返しても進みません。言い方を変えて、別の角度から話してください。",
       "抽象的な単語より、音・光・手の感触・そのときの気持ちのような具体が効きます。",
-      "会話を30秒続けると、次の記憶のかけらが開きます。正しい話題なら、もっと早く思い出せます。",
+      "しばらく進展がないと、彼女が短い手がかりをつぶやきます。記憶はあなたの会話の内容に応じて開きます。",
       "記憶が戻ると演出が入り、「記憶のかけら」に絵と物語が追加されます。",
     ],
   },
@@ -123,7 +120,7 @@ const GUIDE = [
     points: [
       "右上「記憶のかけら」= 集めた記憶の一覧。左の肖像 = 彼女の心の段階。",
       "画面下の「会話の記録」= 交わした言葉の振り返り。",
-      "会話するたびに、この端末へ自動保存されます。「つづきから」で再開できます。",
+      "会話するたびに、この端末へ自動保存されます。記憶を残す場合は設定から書き出せます。",
       "設定から、BGM・音量・カメラ補助・アニメーションの調整、セーブの書き出しと読み込みができます。",
       "カメラは完全に任意です。映像は端末内だけで処理し、送信しません。音声会話中の声と会話文はOpenAIへ送られます。",
     ],
@@ -147,11 +144,7 @@ async function api<T>(path: string, data: unknown, code = ""): Promise<T> {
   return body;
 }
 
-export function LiveGame({
-  initialContinue = false,
-}: {
-  initialContinue?: boolean;
-}) {
+export function LiveGame() {
   const [config, setConfig] = useState<Config>({
     ai: false,
     cloud: false,
@@ -188,18 +181,18 @@ export function LiveGame({
     live = useRef<LiveConnection | null>(null),
     current = useRef<Session | null>(null),
     prefsRef = useRef(prefs);
+  const playEpoch = useRef(0);
   const locked = useRef(false),
     spoken = useRef(""),
     contextRef = useRef(""),
     signals = useRef<VisualSignals | null>(null),
-    lastProgress = useRef(0),
     conversationSeconds = useRef(0),
     hintCount = useRef(0),
     queue = useRef<string[]>([]),
     file = useRef<HTMLInputElement>(null);
-  const processRef = useRef<
-    (text: string, isVoice?: boolean, timed?: boolean) => Promise<void>
-  >(async () => {});
+  const processRef = useRef<(text: string, isVoice?: boolean) => Promise<void>>(
+    async () => {},
+  );
   const onError = useCallback((text: string) => setError(text), []);
   const onSignals = useCallback((s: VisualSignals | null) => {
     signals.current = s;
@@ -210,6 +203,19 @@ export function LiveGame({
     live.current = null;
     setVoice("idle");
     setSpeaking(false);
+  }
+  function exitGame() {
+    playEpoch.current++;
+    queue.current = [];
+    live.current?.dispose();
+    stopVoice();
+    setPrefs((p) => ({ ...p, camera: false }));
+    conversationSeconds.current = 0;
+    setUnlock(null);
+    setModal(null);
+    setScreen("home");
+    setInput("");
+    setError("");
   }
   function persist(data: Session) {
     current.current = data;
@@ -262,20 +268,6 @@ export function LiveGame({
         setGuideSeen(localStorage.getItem(guideKey) === "1");
         const token = localStorage.getItem(saveKey);
         setHasSave(!!token);
-        if (initialContinue && token) {
-          void api<Session>("/api/session", { action: "load", token })
-            .then((data) => {
-              if (active) {
-                current.current = data;
-                setSession(data);
-                setLine(data.state.history.at(-1)?.content || story.opening);
-                setScreen(data.state.completed ? "ending" : "game");
-              }
-            })
-            .catch((e) => {
-              if (active) setError(e.message);
-            });
-        }
       } catch {
         /* An unavailable browser store does not prevent a new game. */
       }
@@ -285,7 +277,7 @@ export function LiveGame({
       active = false;
       live.current?.dispose();
     };
-  }, [initialContinue]);
+  }, []);
   useEffect(() => {
     const el = audio.current;
     if (el) {
@@ -335,11 +327,23 @@ export function LiveGame({
       )
         return;
       conversationSeconds.current++;
-      if (conversationSeconds.current >= 30 && !locked.current)
-        void processRef.current("", false, true);
+      if (
+        conversationSeconds.current >= 30 &&
+        !locked.current &&
+        !speaking &&
+        hintCount.current < 3
+      ) {
+        const hint = conversationHint(s.state, hintCount.current);
+        if (!hint) return;
+        setLine(hint);
+        live.current?.hint(hint);
+        hintCount.current++;
+        setHintLevel(hintCount.current);
+        conversationSeconds.current = 0;
+      }
     }, 1000);
     return () => clearInterval(interval);
-  }, [screen, unlock, modal, voice]);
+  }, [screen, unlock, modal, voice, speaking]);
   useEffect(() => {
     // Hiding the tab only mutes the microphone. Tearing the call down here is
     // what made the conversation die whenever the player glanced away.
@@ -351,14 +355,22 @@ export function LiveGame({
     return () => document.removeEventListener("visibilitychange", hide);
   }, []);
 
-  async function start(mode: "demo" | "live") {
+  async function start() {
     if (locked.current) return;
+    if (!config.ai) {
+      setError("会話を始めるにはOpenAI APIの設定が必要です。");
+      return;
+    }
+    playEpoch.current++;
     locked.current = true;
     setBusy(true);
     setError("");
     try {
       stopVoice();
-      const data = await api<Session>("/api/session", { action: "new", mode });
+      const data = await api<Session>("/api/session", {
+        action: "new",
+        mode: "live",
+      });
       persist(data);
       conversationSeconds.current = 0;
       setLine(story.opening);
@@ -367,7 +379,6 @@ export function LiveGame({
       hintCount.current = 0;
       contextRef.current = "";
       spoken.current = "";
-      markProgress(lastProgress);
       // First-time players read the full guide before anything starts; the
       // last page is what opens the microphone.
       if (!guideSeen) {
@@ -377,30 +388,6 @@ export function LiveGame({
         setModal(null);
         await connectVoice(data);
       }
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      locked.current = false;
-      setBusy(false);
-    }
-  }
-  async function resume() {
-    if (locked.current) return;
-    locked.current = true;
-    setBusy(true);
-    setError("");
-    try {
-      const token = localStorage.getItem(saveKey);
-      const data = await api<Session>("/api/session", {
-        action: "load",
-        token: token || undefined,
-      });
-      persist(data);
-      setLine(data.state.history.at(-1)?.content || story.opening);
-      setScreen(data.state.completed ? "ending" : "game");
-      contextRef.current = "";
-      markProgress(lastProgress);
-      if (!data.state.completed) await connectVoice(data);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -433,8 +420,9 @@ export function LiveGame({
       setTimeout(() => void ctx.close(), 2400);
     } catch {}
   }
-  async function process(text: string, isVoice = false, timed = false) {
-    if ((!text.trim() && !timed) || !current.current) return;
+  async function process(text: string, isVoice = false) {
+    if (!text.trim() || !current.current) return;
+    const epoch = playEpoch.current;
     if (locked.current) {
       if (isVoice) queue.current.push(text);
       return;
@@ -444,10 +432,9 @@ export function LiveGame({
     setError("");
     try {
       const result = await api<Turn>(
-        timed ? "/api/memory" : "/api/analyze",
+        "/api/analyze",
         {
           token: current.current.token,
-          action: timed ? "reveal" : undefined,
           message: text,
           voice: isVoice,
           // What she actually said, so history holds her real words.
@@ -456,6 +443,7 @@ export function LiveGame({
         },
         prefsRef.current.code,
       );
+      if (epoch !== playEpoch.current) return;
       persist(result);
       contextRef.current = result.context;
       live.current?.setToken(result.token);
@@ -463,11 +451,11 @@ export function LiveGame({
         setLine(result.reply);
       // Typed input during a live call is spoken back, so the two ways of
       // talking to her stay one conversation.
-      if (!timed && !isVoice && live.current?.connected && !result.unlocked)
+      if (!isVoice && live.current?.connected && !result.unlocked)
         live.current.typed(text);
       setInput("");
       if (result.gain) {
-        markProgress(lastProgress);
+        conversationSeconds.current = 0;
         hintCount.current = 0;
         setHintLevel(0);
       }
@@ -487,6 +475,7 @@ export function LiveGame({
         setScreen("ending");
       }
     } catch (e) {
+      if (epoch !== playEpoch.current) return;
       setError((e as Error).message);
       if (isVoice) setInput(text);
     } finally {
@@ -501,11 +490,9 @@ export function LiveGame({
   });
   /** Open the voice call. Falls back to the typed panel when the mic is out. */
   async function connectVoice(session: Session) {
-    if (session.state.mode === "demo") {
-      setShowText(true);
-      return;
-    }
+    const epoch = playEpoch.current;
     const check = await checkMicrophone();
+    if (epoch !== playEpoch.current) return;
     if (!check.ok) {
       // The inline notice beside the typed panel says this already.
       setMic({ reason: check.reason, message: check.message });
@@ -520,15 +507,21 @@ export function LiveGame({
     setError("");
     const connection = new LiveConnection({
       onReady: () => {
+        if (epoch !== playEpoch.current) {
+          connection.dispose();
+          return;
+        }
         setMic(null);
         // A re-dialled call starts from the session config, so any context
         // learned since then is re-applied here.
         if (contextRef.current) connection.update(contextRef.current, null);
       },
       onInput: (t) => {
+        if (epoch !== playEpoch.current) return;
         void processRef.current(t, true);
       },
       onOutput: (t) => {
+        if (epoch !== playEpoch.current) return;
         spoken.current = t;
         setLine(t);
       },
@@ -544,7 +537,9 @@ export function LiveGame({
     live.current = connection;
     try {
       await connection.start(session.token, prefsRef.current.code);
+      if (epoch !== playEpoch.current) connection.dispose();
     } catch (e) {
+      if (epoch !== playEpoch.current) return;
       const { reason, message } = micErrorMessage(e);
       live.current = null;
       setVoice("idle");
@@ -566,13 +561,6 @@ export function LiveGame({
       return;
     }
     if (!session) return;
-    if (session.state.mode === "demo") {
-      setShowText(true);
-      setNotice(
-        "体験モードはテキストで遊べます。API設定後、新しい物語から音声会話を始められます。",
-      );
-      return;
-    }
     await connectVoice(session);
   }
   async function save() {
@@ -682,28 +670,16 @@ export function LiveGame({
         <button
           className="wordmark"
           aria-label="LIVE ホーム"
-          onClick={() => {
-            stopVoice();
-            setScreen("home");
-          }}
+          onClick={exitGame}
         >
           LIVE<span>忘れた心に、灯りを。</span>
         </button>
         <nav aria-label="メインナビゲーション">
           <button
             className={screen === "home" ? "active" : ""}
-            onClick={() => {
-              stopVoice();
-              setScreen("home");
-            }}
+            onClick={exitGame}
           >
             ホーム
-          </button>
-          <button
-            onClick={() => void resume()}
-            disabled={busy || (!hasSave && !config.cloud)}
-          >
-            つづきから
           </button>
           <button onClick={() => setModal("about")}>この物語について</button>
         </nav>
@@ -771,11 +747,7 @@ export function LiveGame({
               <button
                 className="start-button"
                 disabled={busy}
-                onClick={() =>
-                  hasSave
-                    ? setModal("restart")
-                    : void start(config.ai ? "live" : "demo")
-                }
+                onClick={() => (hasSave ? setModal("restart") : void start())}
               >
                 <span className="button-star">✧</span>
                 <span>
@@ -783,13 +755,6 @@ export function LiveGame({
                   <small>BEGIN YOUR STORY</small>
                 </span>
                 <ArrowRight size={21} />
-              </button>
-              <button
-                className="continue-button"
-                onClick={() => void resume()}
-                disabled={busy || (!hasSave && !config.cloud)}
-              >
-                つづきから <ChevronRight size={15} />
               </button>
               <p className="play-note">
                 <Headphones size={13} /> 音声でも、文字でも。あなたのペースで。
@@ -807,7 +772,7 @@ export function LiveGame({
               />
               <div>
                 <span className="eyebrow">SOMEWHERE IN HER MEMORY</span>
-                <p>「……あなたは、私を知っていますか？」</p>
+                <p>「……この街の灯りを、覚えている気がします。」</p>
                 <span className="muted">
                   名前も、昨日も。まだ、思い出せない。
                 </span>
@@ -820,7 +785,7 @@ export function LiveGame({
               <i className="status-dot" />
               {config.ai
                 ? "あなたとの会話から、物語が動きだす。"
-                : "体験モード · API設定なしで遊べます"}
+                : "会話の開始にはAPI設定が必要です"}
             </span>
             <button onClick={() => setModal("about")}>
               遊び方 <ArrowRight size={14} />
@@ -837,7 +802,7 @@ export function LiveGame({
             </span>
             <span className="mode-pill">
               <i className="status-dot" />
-              {state.mode === "demo" ? "体験モード" : "AI会話"}
+              AI会話
               {voiceLive
                 ? " · 音声接続中"
                 : voiceBusy
@@ -1030,19 +995,6 @@ export function LiveGame({
                     </form>
                   </div>
                 )}
-                {state.mode === "demo" && (
-                  <div className="voice-side demo-side">
-                    <button
-                      className={`camera-button ${prefs.camera ? "enabled" : ""}`}
-                      onClick={() =>
-                        setPrefs((p) => ({ ...p, camera: !p.camera }))
-                      }
-                    >
-                      <Camera size={17} />
-                      <span>{prefs.camera ? "補助中" : "カメラ任意"}</span>
-                    </button>
-                  </div>
-                )}
                 <p className="conversation-tip">
                   正解を急がず、情景や気持ちを一緒にたどってみてください。
                 </p>
@@ -1139,6 +1091,12 @@ export function LiveGame({
             ×
           </button>
         </div>
+      )}
+
+      {screen !== "home" && !modal && !unlock && (
+        <button className="exit-game-button" onClick={exitGame}>
+          <LogOut size={21} /> 会話を終了して抜ける
+        </button>
       )}
 
       {modal === "guide" && (
@@ -1242,7 +1200,7 @@ export function LiveGame({
           <div className="save-settings">
             <h3>記憶のセーブ</h3>
             <p>
-              会話ごとにこの端末へ自動保存。同じブラウザで再開できます。
+              会話ごとにこの端末へ自動保存。設定から書き出して保管できます。
               {config.cloud
                 ? "「保存」でクラウドにも保管します。"
                 : "クラウド保存は未設定です。"}
@@ -1361,7 +1319,7 @@ export function LiveGame({
             操作説明をはじめから読む
           </button>
           <p className="privacy-note">
-            彼女の音声はAIが生成します。音声会話中の音声・会話文はOpenAIへ送信されます。カメラは任意で、映像は端末内で処理します。体験モードでは外部AIを呼ばず、用意した台詞とキーワード判定で遊べます。
+            彼女の音声はAIが生成します。音声会話中の音声・会話文はOpenAIへ送信されます。カメラは任意で、映像は端末内で処理します。
           </p>
         </Modal>
       )}
@@ -1373,27 +1331,18 @@ export function LiveGame({
         >
           <p className="modal-description">
             {hasSave
-              ? "新しい物語をはじめると、端末のつづきから再開するデータを更新します。今の記憶を残す場合は、設定から書き出してください。"
+              ? "新しい物語をはじめると、端末の保存データを更新します。今の記憶を残す場合は、設定から書き出してください。"
               : "あなたの言葉で、彼女の記憶をたどってください。"}
           </p>
           <div className="button-row">
             <button
               className="gold-button"
               disabled={busy}
-              onClick={() => void start(config.ai ? "live" : "demo")}
+              onClick={() => void start()}
             >
               新しくはじめる
               <ArrowRight size={17} />
             </button>
-            {config.ai && (
-              <button
-                className="outline-button"
-                disabled={busy}
-                onClick={() => void start("demo")}
-              >
-                体験モード
-              </button>
-            )}
             <button className="text-button" onClick={() => setModal(null)}>
               戻る
             </button>

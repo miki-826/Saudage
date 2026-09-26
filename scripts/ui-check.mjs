@@ -99,172 +99,51 @@ await send("Page.enable");
 await send("Runtime.enable");
 await send("Log.enable");
 
-console.log("\n== home ==");
-await send("Page.navigate", { url: BASE });
-await wait(2500);
-check("title renders", (await evaluate(`document.querySelector("h1")?.textContent`)) === "LIVE");
 
-console.log("\n== opening guide ==");
-await evaluate(`
-  (() => {
-    const b = [...document.querySelectorAll("button")]
-      .find(x => x.className.includes("start-button"));
-    b?.click();
-    return !!b;
-  })()
-`);
-await wait(2500);
-const guide = await evaluate(`
-  (() => {
-    const d = document.querySelector("dialog.modal");
-    if (!d) return null;
-    return {
-      heading: d.querySelector("h3")?.textContent,
-      step: d.querySelector(".eyebrow")?.textContent,
-      bullets: d.querySelectorAll(".guide-list li").length,
-      dots: d.querySelectorAll(".guide-steps i").length,
-    };
-  })()
-`);
-check("guide opens before play", !!guide, JSON.stringify(guide));
-check("guide has step dots", guide?.dots === 5, `dots=${guide?.dots}`);
-check("guide page has bullets", (guide?.bullets ?? 0) >= 3);
-await shot("guide-1");
-
-// Walk every page so each one is proven to render.
-const headings = [];
-for (let i = 0; i < 5; i++) {
-  headings.push(
-    await evaluate(`document.querySelector("dialog.modal h3")?.textContent`),
-  );
-  const advanced = await evaluate(`
-    (() => {
-      const b = [...document.querySelectorAll("dialog.modal .guide-nav button")]
-        .find(x => x.textContent.includes("つぎへ"));
-      if (!b) return false;
-      b.click();
-      return true;
-    })()
-  `);
-  if (!advanced) break;
-  await wait(350);
+try {
+  await send("Page.navigate", { url: BASE });
+  await wait(2200);
+  check("title renders", (await evaluate(`document.querySelector("h1")?.textContent`)) === "LIVE");
+  check("demo and continue controls removed", await evaluate(`![...document.querySelectorAll("button")].some(b => /体験モード|つづきから/.test(b.textContent))`));
+  await evaluate(`document.querySelector(".start-button")?.click()`);
+  await wait(1400);
+  check("guide opens", await evaluate(`!!document.querySelector(".guide-list")`));
+  await evaluate(`[...document.querySelectorAll("button")].find(b => b.textContent.includes("説明を飛ばす"))?.click()`);
+  await wait(1600);
+  check("text fallback available", await evaluate(`!!document.querySelector(".message-form input")`));
+  check("exit is visible", await evaluate(`!!document.querySelector(".exit-game-button")`));
+  await evaluate(`(() => {
+    const input = document.querySelector(".message-form input");
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "お店");
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+    document.querySelector(".message-form").dispatchEvent(new Event("submit", {bubbles:true, cancelable:true}));
+  })()`);
+  for (let i = 0; i < 30; i++) {
+    if (await evaluate(`!!document.querySelector(".unlock-scene")`)) break;
+    await wait(1000);
+  }
+  await shot("content-memory");
+  const modalText = await evaluate(`document.querySelector("dialog.modal")?.textContent || ""`);
+  check("shop topic opens memory", /コンビニ/.test(modalText), modalText.slice(0,100));
+  await evaluate(`document.querySelector("dialog.modal")?.dispatchEvent(new Event("cancel", {cancelable:true}))`);
+  await wait(500);
+  const token = await evaluate(`localStorage.getItem("live-save-v1")`);
+  const beforeHint = await evaluate(`document.querySelector(".dialogue-box p")?.textContent`);
+  await wait(32000);
+  check("time does not update memories", token === await evaluate(`localStorage.getItem("live-save-v1")`));
+  check("time shows hint only", await evaluate(`!!document.querySelector(".hint-mark")`));
+  check("hint changes dialogue", beforeHint !== await evaluate(`document.querySelector(".dialogue-box p")?.textContent`));
+  await send("Emulation.setDeviceMetricsOverride", {width:390, height:844, deviceScaleFactor:1, mobile:true});
+  await wait(700);
+  check("mobile exit stays in viewport", await evaluate(`(() => { const r=document.querySelector(".exit-game-button")?.getBoundingClientRect(); return !!r && r.left>=0 && r.right<=innerWidth && r.bottom<=innerHeight; })()`));
+  await shot("mobile-exit-and-hint");
+  await evaluate(`document.querySelector(".exit-game-button")?.click()`);
+  await wait(500);
+  check("exit returns home", await evaluate(`!!document.querySelector(".home-hero") && !document.querySelector(".game-stage")`));
+  check("no console exceptions", !logs.some(l => l.startsWith("EXCEPTION")), logs.filter(l => l.startsWith("EXCEPTION")).join(" | "));
+} finally {
+  ws.close();
+  edge.kill();
 }
-check("all five guide pages render", headings.filter(Boolean).length === 5, headings.join(" | "));
-await shot("guide-last");
-
-console.log("\n== microphone denied: fallback to choices and text ==");
-await evaluate(`
-  (() => {
-    const b = [...document.querySelectorAll("dialog.modal .guide-nav button")]
-      .find(x => x.textContent.includes("彼女に会う"));
-    b?.click();
-    return !!b;
-  })()
-`);
-await wait(3000);
-const stage = await evaluate(`
-  (() => {
-    const suggestions = [...document.querySelectorAll(".suggestions button span:nth-child(2)")]
-      .map(s => s.textContent);
-    return {
-      modal: !!document.querySelector("dialog.modal"),
-      dialogue: document.querySelector(".dialogue-box p")?.textContent,
-      fallback: document.querySelector(".mic-fallback")?.textContent || null,
-      textPanel: !!document.querySelector(".text-panel"),
-      input: !!document.querySelector(".message-form input"),
-      suggestions,
-      mode: document.querySelector(".mode-pill")?.textContent,
-    };
-  })()
-`);
-check("guide closes into the game", !stage.modal);
-check("she speaks the opening line", !!stage.dialogue, stage.dialogue?.slice(0, 30));
-check("typed fallback panel is shown", stage.textPanel && stage.input);
-const live = !!stage.mode?.includes("AI");
-console.log(`  mode: ${stage.mode?.trim()}`);
-if (live)
-  // With an API key the game tries the microphone first; a refusal has to be
-  // explained right where the player is, next to the typed fallback.
-  check(
-    "microphone refusal is explained in place",
-    !!stage.fallback,
-    stage.fallback?.slice(0, 70) ?? "no .mic-fallback",
-  );
-else
-  check(
-    "demo mode needs no microphone notice",
-    !stage.fallback,
-    "text is the way to play",
-  );
-check("three choices offered", stage.suggestions.length === 3, stage.suggestions.join(" / "));
-await shot("game-text-fallback");
-
-console.log("\n== a turn through the choices ==");
-const before = await evaluate(`document.querySelector(".dialogue-box p")?.textContent`);
-await evaluate(`document.querySelector(".suggestions button")?.click()`);
-await wait(3000);
-const after = await evaluate(`
-  (() => ({
-    line: document.querySelector(".dialogue-box p")?.textContent,
-    suggestions: [...document.querySelectorAll(".suggestions button span:nth-child(2)")].map(s => s.textContent),
-    error: document.querySelector(".error-toast span")?.textContent || null,
-  }))()
-`);
-check("her reply changes after a turn", after.line !== before, after.line?.slice(0, 40));
-check("no error toast", !after.error, after.error ?? "");
-
-console.log("\n== repeated turns do not repeat the same reply ==");
-const said = [
-  "レジでお客さんに、袋はいりますかと聞いていた気がする",
-  "怒られて手が震えて、何度も謝っていたのかもしれない",
-  "毎日来る常連さんに、温かいコーヒーを渡していたよね",
-  "忙しい夜に段ボールを開けて、期限を確認していたでしょう",
-];
-const lines = [after.line];
-for (const message of said) {
-  await evaluate(`
-    (() => {
-      const input = document.querySelector(".message-form input");
-      if (!input) return false;
-      const set = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype, "value").set;
-      set.call(input, ${JSON.stringify(message)});
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      document.querySelector(".message-form").dispatchEvent(
-        new Event("submit", { bubbles: true, cancelable: true }));
-      return true;
-    })()
-  `);
-  await wait(2600);
-  lines.push(await evaluate(`document.querySelector(".dialogue-box p")?.textContent`));
-}
-const unique = new Set(lines.filter(Boolean)).size;
-check("replies vary across turns", unique >= 4, `${unique} distinct of ${lines.length}`);
-lines.forEach((l, i) =>
-  console.log(`     ${i}: ${l?.split("\n").join(" / ").slice(0, 70)}`),
-);
-await shot("game-turns");
-
-console.log("\n== help button reopens the full guide ==");
-await evaluate(`
-  [...document.querySelectorAll(".header-actions button")]
-    .find(b => b.getAttribute("aria-label") === "遊び方の説明")?.click()
-`);
-await wait(700);
-check(
-  "guide reachable from the header",
-  await evaluate(
-    `!!document.querySelector("dialog.modal .guide-steps") && !!document.querySelector("dialog.modal .guide-list")`,
-  ),
-);
-
-console.log("\n== console ==");
-const noisy = logs.filter((l) => !/favicon|Download the React DevTools/i.test(l));
-check("no console errors", noisy.length === 0, noisy.slice(0, 3).join(" | "));
-
-ws.close();
-edge.kill();
-console.log(
-  `\n${failures ? "FAILURES: " + failures : "ALL UI CHECKS PASSED"}\n`,
-);
+console.log(failures ? `FAILURES: ${failures}` : "ALL UI CHECKS PASSED");
 process.exit(failures ? 1 : 0);

@@ -4,7 +4,8 @@ import {
   createState,
   advance,
   demoAnalyze,
-  timedMemory,
+  conversationHint,
+  directAnalysis,
   allowedContext,
   characterPrompt,
   memories,
@@ -65,14 +66,21 @@ test("An unlocked memory is not awarded again", () => {
   assert.equal(state.memories[0].evidenceCount, 1);
   assert.equal(state.memories[0].stage, 3);
 });
-test("Timed memories unlock at 30 seconds and restart their cooldown", () => {
+test("Hints never change memory state, even after repeated hints", () => {
   const state = newState();
-  const start = Date.parse(state.createdAt);
-  assert.equal(timedMemory(state, start + 29999).unlocked, null);
-  const first = timedMemory(state, start + 30000);
-  assert.equal(first.unlocked, "store");
-  assert.equal(timedMemory(first.state, start + 30001).unlocked, null);
-  assert.equal(timedMemory(first.state, start + 60000).unlocked, "stocking");
+  state.createdAt = "2020-01-01T00:00:00.000Z";
+  const before = structuredClone(state);
+  for (let i = 0; i < 100; i++) assert.ok(conversationHint(state, i));
+  assert.deepEqual(state, before);
+});
+test("Store words unlock the store memory and unrelated words do not", () => {
+  for (const message of ["コンビニ", "お店", "お店で働いてた", "店"]) {
+    const state = newState();
+    const analysis = directAnalysis(state, message);
+    assert.ok(analysis);
+    assert.equal(advance(state, analysis, message).unlocked, "store");
+  }
+  assert.equal(directAnalysis(newState(), "宇宙船で旅行したい"), null);
 });
 test("Locked facts never enter character context", () => {
   const state = newState();
@@ -80,17 +88,19 @@ test("Locked facts never enter character context", () => {
   assert.ok(!characterPrompt(state).includes("コンビニ"));
   assert.ok(!characterPrompt(state).includes("クレーム"));
 });
-test("Important memories clear without restoring every optional node", () => {
+test("The ending waits for all five memories", () => {
   let state = newState();
   for (const id of ["store", "service", "complaint", "regular"] as const) {
     for (let i = 0; i < 4; i++)
       state = advance(state, perfect(id), `${id} detailed evidence ${i}`).state;
   }
-  assert.equal(state.completed, true);
+  assert.equal(state.completed, false);
   assert.equal(
     state.memories.find((m) => m.id === "stocking")!.unlocked,
     false,
   );
+  state = advance(state, perfect("stocking"), "商品を並べる").state;
+  assert.equal(state.completed, true);
 });
 test("All five demo memories can be restored using distinct natural evidence", () => {
   let state = newState();
@@ -111,4 +121,21 @@ test("Invalid model scores are rejected", () => {
   assert.throws(() =>
     advance(newState(), { ...perfect("store"), hintStrength: NaN }, "NaN"),
   );
+});
+
+test("Semantic judgements unlock memories in any order without exact keywords", () => {
+  let state = newState();
+  const turns = [
+    ["regular", "毎朝同じ飲み物を買う顔なじみ"],
+    ["complaint", "強い口調で文句を言われて怖かった"],
+    ["service", "お金を受け取って袋を渡す"],
+    ["stocking", "箱から出して陳列する"],
+    ["store", "夜中も買い物できる場所"],
+  ] as const;
+  for (const [index, [id, message]] of turns.entries()) {
+    const result = advance(state, { ...perfect(id), relevance: 0.7 }, message);
+    assert.equal(result.unlocked, id);
+    state = result.state;
+    assert.equal(state.completed, index === 4);
+  }
 });
