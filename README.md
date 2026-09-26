@@ -1,0 +1,61 @@
+# LIVE
+
+**忘れていた心に、もう一度、灯りを。**
+
+記憶を失ったAIとの会話を通して、過去と心を取り戻すWebアドベンチャー。
+提供された背景・UI資料・BGMを使い、5つの記憶、会話、記憶ボード、解放演出、エンディングを実装しています。
+
+## Vercelで公開する
+
+**[Vercel・API設定ガイド](docs/Vercel設定ガイド.md)** の順に設定してください。
+
+1. Vercelから `miki-826/Saudage` をImport。
+2. Frameworkは **Next.js**、Root Directoryは **リポジトリルート（空欄）**、Node.jsは **24.x**。
+3. `SESSION_SECRET` に32バイト以上のランダム文字列を登録。
+4. `OPENAI_API_KEY` を登録するとAI会話が使えます。未設定なら体験モード。
+5. Deploy。環境変数を後から変更したらRedeploy。
+
+Supabaseは任意です。未設定でも同じブラウザへの自動セーブで遊べます。
+
+## ローカル起動
+
+```bash
+npm ci
+npm run dev
+```
+
+`http://127.0.0.1:3000` を開きます。Node.js 24.x推奨。
+APIを使う場合は `.env.example` を `.env.local` にコピーして設定してください。
+開発時は未設定でも体験モードが動きます。本番では `SESSION_SECRET` を登録してください。
+
+```bash
+npm run typecheck
+npm run lint
+npm test
+npm run build
+```
+
+開発サーバー起動中に `npm run check-api` で体験モードの20ターン・5記憶・エンディング・セーブと入力検証を確認できます。クラウド未設定のローカル環境向けです。
+
+## 実装した機能
+
+- タイトル、会話、記憶ボード、設定、最近の履歴、エンディング
+- テキストと選択肢、GPT-Live / WebRTCの音声接続
+- OpenAI Structured Outputsによる判定と、独立したMemory Engine
+- 1ターン最大25、4回以上の証拠、親記憶、繰り返し抑制
+- 30秒停滞時の段階ヒント、記憶量に応じた人格の変化
+- MediaPipe Face Landmarker。映像は端末内処理、カメラは任意
+- 端末自動保存、書き出し・読み込み、任意のSupabaseクラウド保存
+- 提供BGM、生成挿絵、スマートフォン対応、動きを減らす設定
+
+APIキーをブラウザに返すことはありません。体験モードは外部AIを呼ばないキーワード判定と用意した台詞です。セーブは同じブラウザのCookieに紐づきます。
+
+## 文書
+
+- [要求仕様（元のmain.md）](docs/要求仕様.md)
+- [実装仕様書・他のAI向け引継ぎ](docs/実装仕様書.md)
+- [Vercel・API設定ガイド](docs/Vercel設定ガイド.md)
+- [素材と生成画像](docs/素材と生成画像.md)
+- [Supabase SQL](supabase/schema.sql)
+
+ローカルの体験モード、ビルド、ブラウザ表示を確認しています。OpenAI・Supabase実接続とVercel本番の最終確認は、利用者によるAPI設定後に行ってください。

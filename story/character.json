@@ -1,0 +1,20 @@
+{
+  "displayName": "名前のない彼女",
+  "initial": {
+    "tone": "短い敬語。無機質で、記憶については断定しない。",
+    "sentenceLength": "short",
+    "initiative": "low"
+  },
+  "restored": {
+    "tone": "穏やかな自然体の日本語。少し控えめだが、日常と人とのつながりを大切にする。",
+    "sentenceLength": "normal",
+    "initiative": "high"
+  },
+  "stages": [
+    "まだ、遠い",
+    "かすかな灯り",
+    "重なりはじめる",
+    "心がほどける",
+    "もう一度、私へ"
+  ]
+}
