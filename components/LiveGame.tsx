@@ -741,8 +741,6 @@ export function LiveGame() {
                 雨の降る、どこか懐かしいこの街で。
                 <br />
                 あなたの言葉が、彼女の記憶を灯す。
-                <br />
-                これは、話すことで紡がれていく心の物語。
               </p>
               <button
                 className="start-button"
@@ -756,6 +754,13 @@ export function LiveGame() {
                 </span>
                 <ArrowRight size={21} />
               </button>
+              <button
+                className="story-intro-button"
+                onClick={() => setModal("about")}
+              >
+                <BookOpen size={18} /> 画像で見る、物語と遊び方{" "}
+                <ChevronRight size={16} />
+              </button>
               <p className="play-note">
                 <Headphones size={13} /> 音声でも、文字でも。あなたのペースで。
               </p>
@@ -765,32 +770,7 @@ export function LiveGame() {
               <br />
               　　待っている人がいます。
             </div>
-            <div className="encounter-card">
-              <img
-                src="/images/character.webp"
-                alt="街灯の下で記憶を探す、名前のない彼女"
-              />
-              <div>
-                <span className="eyebrow">SOMEWHERE IN HER MEMORY</span>
-                <p>「……この街の灯りを、覚えている気がします。」</p>
-                <span className="muted">
-                  名前も、昨日も。まだ、思い出せない。
-                </span>
-              </div>
-            </div>
           </section>
-          <footer className="home-footer">
-            <span>AN INTERACTIVE AI STORY</span>
-            <span>
-              <i className="status-dot" />
-              {config.ai
-                ? "あなたとの会話から、物語が動きだす。"
-                : "会話の開始にはAPI設定が必要です"}
-            </span>
-            <button onClick={() => setModal("about")}>
-              遊び方 <ArrowRight size={14} />
-            </button>
-          </footer>
         </>
       )}
 
@@ -1106,6 +1086,23 @@ export function LiveGame() {
           wide
         >
           <div className="guide">
+            <img
+              className="guide-illustration"
+              src={
+                guideStep === 0
+                  ? "/images/character.webp"
+                  : guideStep === 3
+                    ? "/images/memory-store.webp"
+                    : "/images/street.webp"
+              }
+              alt={
+                guideStep === 0
+                  ? "記憶を失った彼女"
+                  : guideStep === 3
+                    ? "会話から浮かぶお店の記憶"
+                    : "物語の舞台となる雨の街"
+              }
+            />
             <div className="guide-steps" aria-hidden="true">
               {GUIDE.map((g, i) => (
                 <i key={g.heading} className={i <= guideStep ? "lit" : ""} />
@@ -1272,41 +1269,50 @@ export function LiveGame() {
         <Modal
           title="言葉で、心がほどけていく。"
           onClose={() => setModal(null)}
+          wide
         >
           <p className="modal-description">
             LIVEは、記憶を失ったAIと会話をしながら、
             <br />
             彼女の過去と人格を取り戻していく物語です。
           </p>
-          <div className="howto">
-            <div>
-              <span>01</span>
-              <h3>まずは、声で話しかける。</h3>
-              <p>
-                物語を始めると、そのままマイクにつながります。話し終えて少し黙ると、その言葉が彼女に届きます。
-              </p>
-            </div>
-            <div>
-              <span>02</span>
-              <h3>マイクがなくても、大丈夫。</h3>
-              <p>
-                マイクが使えないときは、選択肢とテキスト入力が自動で開きます。音声中でも「文字で送る」からいつでも書けます。
-              </p>
-            </div>
-            <div>
-              <span>03</span>
-              <h3>情景を、一緒にたどる。</h3>
-              <p>
-                何をしていたのか。誰といたのか。どう感じたのか。会話を重ねると記憶の断片がつながります。
-              </p>
-            </div>
-            <div>
-              <span>04</span>
-              <h3>ひとつの心に、出会う。</h3>
-              <p>
-                答えを当てることがゴールではありません。彼女が「私」を語れるまで、そばにいてください。
-              </p>
-            </div>
+          <div className="story-picture-steps">
+            <article>
+              <img
+                src="/images/character.webp"
+                alt="街灯の下で記憶を探す彼女"
+              />
+              <div>
+                <span className="eyebrow">01 · 出会う</span>
+                <h3>記憶をなくした彼女に、言葉を。</h3>
+                <p>
+                  名前も昨日も思い出せない彼女。声で話しかけても、文字で伝えても大丈夫です。
+                </p>
+              </div>
+            </article>
+            <article>
+              <img
+                src="/images/memory-store.webp"
+                alt="言葉から浮かび上がる、夜のお店の風景"
+              />
+              <div>
+                <span className="eyebrow">02 · 思い出す</span>
+                <h3>近い意味の言葉が、記憶を灯す。</h3>
+                <p>
+                  たとえば「お店」や「夜中も買い物できる場所」。AIが意味を読み取り、つながる記憶を開きます。話す順番は自由です。
+                </p>
+              </div>
+            </article>
+            <article>
+              <img src="/images/street.webp" alt="灯りがともる街へ続く道" />
+              <div>
+                <span className="eyebrow">03 · つながる</span>
+                <h3>5つのかけらが、ひとつの物語に。</h3>
+                <p>
+                  すべての記憶がそろうと、彼女が自分の過去を語ります。迷ったら、そっとこぼれるヒントを手がかりに。
+                </p>
+              </div>
+            </article>
           </div>
           <button
             className="outline-button"
