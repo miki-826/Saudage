@@ -4,6 +4,7 @@ import {
   createState,
   advance,
   demoAnalyze,
+  timedMemory,
   allowedContext,
   characterPrompt,
   memories,
@@ -19,19 +20,22 @@ const perfect = (id: Analysis["relatedMemoryId"]): Analysis => ({
   engagement: 1,
   shouldAdvance: true,
 });
-test("A direct answer cannot unlock a memory in one turn", () => {
+test("A correct topic unlocks a memory in one turn", () => {
   const result = advance(newState(), perfect("store"), "コンビニで働いてた");
-  assert.equal(result.state.memories[0].progress, 25);
-  assert.equal(result.unlocked, null);
-  assert.equal(result.state.memories[0].stage, 1);
+  assert.equal(result.state.memories[0].progress, 100);
+  assert.equal(result.unlocked, "store");
+  assert.equal(result.state.memories[0].stage, 3);
 });
-test("Parent memory must have a fragment before children can advance", () => {
+test("Correct topics can restore child memories immediately", () => {
   assert.equal(
     advance(newState(), perfect("stocking"), "棚へ商品を並べた").gain,
-    0,
+    100,
   );
   const root = advance(newState(), perfect("store"), "夜の店").state;
-  assert.equal(advance(root, perfect("stocking"), "棚へ商品を並べた").gain, 25);
+  assert.equal(
+    advance(root, perfect("stocking"), "棚へ商品を並べた").gain,
+    100,
+  );
 });
 test("Repetition and irrelevant conversations do not farm progress", () => {
   const first = advance(
@@ -53,13 +57,22 @@ test("Repetition and irrelevant conversations do not farm progress", () => {
     0,
   );
 });
-test("Four distinct detailed conversations restore a memory", () => {
+test("An unlocked memory is not awarded again", () => {
   let state = newState();
   for (let i = 0; i < 4; i++)
     state = advance(state, perfect("store"), `違う情景 ${i}`).state;
   assert.equal(state.memories[0].unlocked, true);
-  assert.equal(state.memories[0].evidenceCount, 4);
+  assert.equal(state.memories[0].evidenceCount, 1);
   assert.equal(state.memories[0].stage, 3);
+});
+test("Timed memories unlock at 30 seconds and restart their cooldown", () => {
+  const state = newState();
+  const start = Date.parse(state.createdAt);
+  assert.equal(timedMemory(state, start + 29999).unlocked, null);
+  const first = timedMemory(state, start + 30000);
+  assert.equal(first.unlocked, "store");
+  assert.equal(timedMemory(first.state, start + 30001).unlocked, null);
+  assert.equal(timedMemory(first.state, start + 60000).unlocked, "stocking");
 });
 test("Locked facts never enter character context", () => {
   const state = newState();

@@ -27,7 +27,6 @@ import {
 } from "lucide-react";
 import {
   memories,
-  focusMemory,
   suggestionsFor,
   tone,
   type GameState,
@@ -62,7 +61,7 @@ type Prefs = {
   code: string;
 };
 const defaults: Prefs = {
-  sound: false,
+  sound: true,
   volume: 0.28,
   camera: false,
   motion: true,
@@ -74,9 +73,6 @@ const saveKey = "live-save-v1";
 function markProgress(ref: { current: number }) {
   ref.current = Date.now();
 }
-function stalledFor(ref: { current: number }) {
-  return Date.now() - ref.current;
-}
 const guideKey = "live-guide-v1";
 // Shown in full before the first conversation starts, so nothing about the
 // controls has to be discovered by trial and error.
@@ -85,7 +81,7 @@ const GUIDE = [
     heading: "これは、思い出させる物語です。",
     lead: "彼女は記憶を失ったAIです。名前も、昨日も、自分が何をしていたのかも覚えていません。",
     points: [
-      "職業や答えを当てるゲームではありません。正解を言っても、それだけでは記憶は戻りません。",
+      "コンビニや接客など、記憶につながる話題を伝えると、記憶のかけらが開きます。",
       "あなたが「どこにいたのか」「何をしていたのか」「誰と関わっていたのか」「どう感じていたのか」を語ると、彼女の中の記憶が刺激されます。",
       "5つの記憶がそろい、彼女が自分の言葉で「私はこういう存在だった」と語れたら、物語は終わります。",
     ],
@@ -117,7 +113,7 @@ const GUIDE = [
     points: [
       "同じ言葉を繰り返しても進みません。言い方を変えて、別の角度から話してください。",
       "抽象的な単語より、音・光・手の感触・そのときの気持ちのような具体が効きます。",
-      "30秒ほど進まないと、彼女がそっと手がかりをつぶやきます。3段階まで濃くなります。",
+      "会話を30秒続けると、次の記憶のかけらが開きます。正しい話題なら、もっと早く思い出せます。",
       "記憶が戻ると演出が入り、「記憶のかけら」に絵と物語が追加されます。",
     ],
   },
@@ -164,13 +160,7 @@ export function LiveGame({
   const [session, setSession] = useState<Session | null>(null),
     [screen, setScreen] = useState<"home" | "game" | "ending">("home");
   const [modal, setModal] = useState<
-      | "settings"
-      | "memory"
-      | "about"
-      | "restart"
-      | "history"
-      | "guide"
-      | null
+      "settings" | "memory" | "about" | "restart" | "history" | "guide" | null
     >(null),
     [selected, setSelected] = useState<string | null>(null);
   const [guideStep, setGuideStep] = useState(0),
@@ -203,12 +193,13 @@ export function LiveGame({
     contextRef = useRef(""),
     signals = useRef<VisualSignals | null>(null),
     lastProgress = useRef(0),
+    conversationSeconds = useRef(0),
     hintCount = useRef(0),
     queue = useRef<string[]>([]),
     file = useRef<HTMLInputElement>(null);
-  const processRef = useRef<(text: string, isVoice?: boolean) => Promise<void>>(
-    async () => {},
-  );
+  const processRef = useRef<
+    (text: string, isVoice?: boolean, timed?: boolean) => Promise<void>
+  >(async () => {});
   const onError = useCallback((text: string) => setError(text), []);
   const onSignals = useCallback((s: VisualSignals | null) => {
     signals.current = s;
@@ -257,7 +248,7 @@ export function LiveGame({
         if (stored)
           setPrefs({
             ...defaults,
-            sound: !!stored.sound,
+            sound: stored.soundVersion === 2 ? stored.sound !== false : true,
             volume: Math.max(
               0,
               Math.min(
@@ -300,48 +291,55 @@ export function LiveGame({
     if (el) {
       el.volume = prefs.volume;
       if (prefs.sound) {
-        void el
-          .play()
-          .catch(() =>
-            setNotice(
-              "音を再生するには、もう一度サウンドボタンを押してください。",
-            ),
-          );
+        void el.play().catch(() => {});
       } else el.pause();
     }
     if (hydrated)
       try {
         localStorage.setItem(
           "live-preferences",
-          JSON.stringify({ ...prefs, code: "", camera: false }),
+          JSON.stringify({
+            ...prefs,
+            soundVersion: 2,
+            code: "",
+            camera: false,
+          }),
         );
       } catch {}
   }, [prefs, hydrated]);
+  useEffect(() => {
+    const play = () => {
+      if (prefsRef.current.sound) void audio.current?.play().catch(() => {});
+    };
+    window.addEventListener("pointerdown", play);
+    window.addEventListener("keydown", play);
+    return () => {
+      window.removeEventListener("pointerdown", play);
+      window.removeEventListener("keydown", play);
+    };
+  }, []);
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(""), 4500);
     return () => clearTimeout(t);
   }, [notice]);
   useEffect(() => {
-    if (screen !== "game" || busy || unlock || modal) return;
+    if (screen !== "game" || unlock || modal) return;
     const interval = setInterval(() => {
       const s = current.current;
       if (
         !s ||
         s.state.completed ||
-        stalledFor(lastProgress) < 30000 ||
-        hintCount.current >= 3
+        document.hidden ||
+        (voice !== "live" && s.state.turn === 0)
       )
         return;
-      const hint = focusMemory(s.state).hints[hintCount.current];
-      setLine(hint);
-      live.current?.hint(hint);
-      hintCount.current++;
-      setHintLevel(hintCount.current);
-      markProgress(lastProgress);
+      conversationSeconds.current++;
+      if (conversationSeconds.current >= 30 && !locked.current)
+        void processRef.current("", false, true);
     }, 1000);
     return () => clearInterval(interval);
-  }, [screen, busy, unlock, modal]);
+  }, [screen, unlock, modal, voice]);
   useEffect(() => {
     // Hiding the tab only mutes the microphone. Tearing the call down here is
     // what made the conversation die whenever the player glanced away.
@@ -362,6 +360,7 @@ export function LiveGame({
       stopVoice();
       const data = await api<Session>("/api/session", { action: "new", mode });
       persist(data);
+      conversationSeconds.current = 0;
       setLine(story.opening);
       setScreen("game");
       setHintLevel(0);
@@ -434,8 +433,8 @@ export function LiveGame({
       setTimeout(() => void ctx.close(), 2400);
     } catch {}
   }
-  async function process(text: string, isVoice = false) {
-    if (!text.trim() || !current.current) return;
+  async function process(text: string, isVoice = false, timed = false) {
+    if ((!text.trim() && !timed) || !current.current) return;
     if (locked.current) {
       if (isVoice) queue.current.push(text);
       return;
@@ -445,9 +444,10 @@ export function LiveGame({
     setError("");
     try {
       const result = await api<Turn>(
-        "/api/analyze",
+        timed ? "/api/memory" : "/api/analyze",
         {
           token: current.current.token,
+          action: timed ? "reveal" : undefined,
           message: text,
           voice: isVoice,
           // What she actually said, so history holds her real words.
@@ -463,7 +463,7 @@ export function LiveGame({
         setLine(result.reply);
       // Typed input during a live call is spoken back, so the two ways of
       // talking to her stay one conversation.
-      if (!isVoice && live.current?.connected && !result.unlocked)
+      if (!timed && !isVoice && live.current?.connected && !result.unlocked)
         live.current.typed(text);
       setInput("");
       if (result.gain) {
@@ -477,6 +477,7 @@ export function LiveGame({
         result.unlocked ? result.reply : null,
       );
       if (result.unlocked) {
+        conversationSeconds.current = 0;
         setModal(null);
         setUnlock(memories.find((m) => m.id === result.unlocked)!);
         live.current?.pauseForMemory();
@@ -547,7 +548,12 @@ export function LiveGame({
       const { reason, message } = micErrorMessage(e);
       live.current = null;
       setVoice("idle");
-      if (e instanceof Error && /NotAllowedError|NotFoundError|SecurityError|OverconstrainedError/.test(e.name)) {
+      if (
+        e instanceof Error &&
+        /NotAllowedError|NotFoundError|SecurityError|OverconstrainedError/.test(
+          e.name,
+        )
+      ) {
         setMic({ reason, message });
       } else setError((e as Error).message || message);
       setShowText(true);
@@ -665,7 +671,13 @@ export function LiveGame({
           />
         ))}
       </div>
-      <audio ref={audio} src="/sounds/streetlight.mp4" loop preload="none" />
+      <audio
+        ref={audio}
+        src="/sounds/streetlight.mp4"
+        autoPlay
+        loop
+        preload="auto"
+      />
       <header className="site-header">
         <button
           className="wordmark"
@@ -800,7 +812,6 @@ export function LiveGame({
                   名前も、昨日も。まだ、思い出せない。
                 </span>
               </div>
-              <span className="card-spark">✧</span>
             </div>
           </section>
           <footer className="home-footer">

@@ -30,6 +30,7 @@ export const stateSchema = z.object({
     .max(16),
   createdAt: z.string(),
   updatedAt: z.string(),
+  lastMemoryAt: z.string().optional(),
   completed: z.boolean(),
 });
 export type GameState = z.infer<typeof stateSchema>;
@@ -173,25 +174,27 @@ export function advance(state: GameState, input: Analysis, message: string) {
     node &&
     current &&
     !current.unlocked &&
-    available(state, node) &&
+    (available(state, node) || analysis.relevance >= 0.8) &&
     analysis.shouldAdvance &&
     analysis.relevance >= 0.35 &&
     !state.seen.includes(normalized)
   ) {
-    gain = Math.min(
-      25,
-      Math.round(
-        25 *
-          (analysis.relevance * 0.35 +
-            analysis.hintStrength * 0.2 +
-            analysis.evidenceDepth * 0.3 +
-            analysis.engagement * 0.15),
-      ),
-    );
+    gain =
+      analysis.relevance >= 0.8
+        ? 100 - current.progress
+        : Math.min(
+            25,
+            Math.round(
+              25 *
+                (analysis.relevance * 0.35 +
+                  analysis.hintStrength * 0.2 +
+                  analysis.evidenceDepth * 0.3 +
+                  analysis.engagement * 0.15),
+            ),
+          );
     current.progress = Math.min(100, current.progress + gain);
     current.evidenceCount++;
-    current.unlocked =
-      current.progress >= node.threshold && current.evidenceCount >= 4;
+    current.unlocked = current.progress >= node.threshold;
     current.stage = current.unlocked
       ? 3
       : current.progress >= 50
@@ -199,7 +202,10 @@ export function advance(state: GameState, input: Analysis, message: string) {
         : current.progress >= 20
           ? 1
           : 0;
-    if (current.unlocked) unlocked = current.id;
+    if (current.unlocked) {
+      unlocked = current.id;
+      next.lastMemoryAt = new Date().toISOString();
+    }
   }
   next.seen = [...state.seen, normalized].slice(-100);
   next.turn++;
@@ -214,10 +220,10 @@ export function advance(state: GameState, input: Analysis, message: string) {
   return { state: next, unlocked, gain };
 }
 export function demoAnalyze(state: GameState, message: string): Analysis {
+  const direct = directAnalysis(state, message);
+  if (direct) return direct;
   const candidates = memories.filter(
-    (m) =>
-      available(state, m) &&
-      !state.memories.find((s) => s.id === m.id)?.unlocked,
+    (m) => !state.memories.find((s) => s.id === m.id)?.unlocked,
   );
   const ranked = candidates
     .map((m) => ({
@@ -231,12 +237,59 @@ export function demoAnalyze(state: GameState, message: string): Analysis {
     relatedMemoryId: related
       ? (top.m.id as Analysis["relatedMemoryId"])
       : "none",
-    relevance: related ? 0.9 : 0,
+    relevance: related ? 0.6 : 0,
     hintStrength: related ? Math.min(1, 0.5 + top.count * 0.14) : 0,
     evidenceDepth: related ? Math.min(1, 0.3 + message.length / 80) : 0,
     engagement: 0.5,
     shouldAdvance: related,
   };
+}
+export function directAnalysis(
+  state: GameState,
+  message: string,
+): Analysis | null {
+  const topics = [
+    ["store", /コンビニ|コンビニエンスストア/],
+    ["stocking", /品出し|商品.*並べ|棚.*補充|在庫補充/],
+    ["service", /接客|レジ|会計/],
+    ["complaint", /クレーム|苦情|怒られ/],
+    ["regular", /常連|いつものお客|毎日.*コーヒー/],
+  ] as const;
+  const found = topics.find(
+    ([id, pattern]) =>
+      !state.memories.find((m) => m.id === id)?.unlocked &&
+      pattern.test(message.normalize("NFKC")),
+  );
+  return found
+    ? {
+        relatedMemoryId: found[0],
+        relevance: 1,
+        hintStrength: 1,
+        evidenceDepth: 1,
+        engagement: 1,
+        shouldAdvance: true,
+      }
+    : null;
+}
+export function timedMemory(state: GameState, now = Date.now()) {
+  const next = structuredClone(state);
+  const memory = next.memories.find((m) => m.id === focusMemory(state).id);
+  if (
+    state.completed ||
+    !memory ||
+    memory.unlocked ||
+    now - Date.parse(state.lastMemoryAt ?? state.createdAt) < 30000
+  )
+    return { state: next, unlocked: null, gain: 0 };
+  const gain = 100 - memory.progress;
+  memory.progress = 100;
+  memory.stage = 3;
+  memory.unlocked = true;
+  next.lastMemoryAt = next.updatedAt = new Date(now).toISOString();
+  next.completed = story.requiredMemories.every(
+    (id) => next.memories.find((m) => m.id === id)?.unlocked,
+  );
+  return { state: next, unlocked: memory.id, gain };
 }
 export function allowedContext(state: GameState) {
   return state.memories.flatMap((s) => {
@@ -283,7 +336,7 @@ export function demoReply(
   const m = focusMemory(state),
     s = state.memories.find((s) => s.id === m.id)!,
     hint = hintFor(state, m),
-    pick = <T,>(list: T[]) => list[state.turn % list.length];
+    pick = <T>(list: T[]) => list[state.turn % list.length];
   if (gain > 0)
     return `${pick(
       tone(state).index > 1

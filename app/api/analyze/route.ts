@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   advance,
+  directAnalysis,
   demoAnalyze,
   demoReply,
   characterPrompt,
@@ -50,7 +51,9 @@ export async function POST(request: Request) {
     if (state.mode === "live") requireAccess(request);
     let warning: string | null = null;
     let assessment;
-    if (state.mode === "demo")
+    const direct = directAnalysis(state, input.message);
+    if (direct) assessment = direct;
+    else if (state.mode === "demo")
       assessment = demoAnalyze(state, input.message);
     else
       try {
@@ -64,14 +67,18 @@ export async function POST(request: Request) {
       }
     const next = advance(state, assessment, input.message);
     let response = demoReply(next.state, next.unlocked, next.gain);
-    if (state.mode === "live" && !input.voice && !next.state.completed) {
+    if (
+      state.mode === "live" &&
+      !input.voice &&
+      !next.state.completed &&
+      !next.unlocked
+    ) {
       try {
         response = await reply(next.state);
       } catch {
         warning =
           "記憶の判定は完了しました。AIの返答が届かなかったため、物語の台詞を表示しています。";
       }
-
     }
     // During a voice call GPT-Live is the one speaking, so the transcript of
     // what she actually said is the real assistant turn. Writing the fallback

@@ -2115,3 +2115,44 @@ input[type="range"] {
     font-size: 104px;
   }
 }
+
+/* Readable instructions on both phones and desktop screens. */
+.guide-lead, .guide-list li {
+  font-size: 17px;
+  line-height: 1.9;
+}
+.hero-description,
+.modal-description,
+.conversation-tip,
+.play-note,
+.privacy-note,
+.setting-row p,
+.howto p,
+.save-settings p,
+.small-note,
+.muted,
+.guide-content p,
+.guide-content li {
+  font-size: 16px;
+  line-height: 1.9;
+}
+@media (max-width: 600px) {
+  .hero-description,
+  .modal-description,
+  .conversation-tip,
+  .play-note,
+  .privacy-note,
+  .setting-row p,
+  .howto p,
+  .save-settings p,
+  .small-note,
+  .muted,
+  .guide-content p,
+  .guide-content li {
+    font-size: 15px;
+  }
+  .encounter-card {
+    height: auto;
+    min-height: 112px;
+  }
+}

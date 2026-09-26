@@ -50,7 +50,7 @@ for (const memory of defs) {
       `。あの頃、そんな仕事や情景があったと思う。${i}つ目の場面はどう感じた？`;
     s = await post("/api/analyze", { token: s.token, message });
     turns++;
-    assert.ok(s.gain <= 25);
+    assert.ok(s.gain <= 100);
     if (s.state.memories.find((m) => m.id === memory.id).unlocked) break;
   }
 }
