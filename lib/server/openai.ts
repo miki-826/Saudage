@@ -2,6 +2,7 @@ import {
   analysisSchema,
   allowedContext,
   characterPrompt,
+  voicePrompt,
   memories,
   type GameState,
   type VisualSignals,
@@ -24,11 +25,14 @@ export async function openai(path: string, payload: unknown) {
     signal: AbortSignal.timeout(45000),
   });
   if (!result.ok) {
-    console.error("OpenAI status", result.status);
+    const detail = await result.text().catch(() => "");
+    console.error("OpenAI status", result.status, detail.slice(0, 600));
     throw new AppError(
       result.status === 429
         ? "AIへの接続が混み合っているか、APIの利用枠に達しています。しばらくして再度お試しください。"
-        : "AIに接続できませんでした。APIキー・モデル利用権限を確認してください。",
+        : result.status === 401 || result.status === 403
+          ? "OpenAI APIキーが無効か、このモデルの利用権限がありません。Vercelの環境変数を確認してください。"
+          : "AIに接続できませんでした。APIキー・モデル利用権限を確認してください。",
       502,
     );
   }
@@ -133,13 +137,26 @@ export async function reply(state: GameState) {
   return text.slice(0, 2800);
 }
 export function liveConfig(state: GameState) {
+  const known = allowedContext(state);
   return {
     model: process.env.OPENAI_LIVE_MODEL || "gpt-live-1",
-    instructions:
-      characterPrompt(state) +
-      " あなたは記憶の更新を待つキャラクター。外部タスクの依頼やdelegationは行わず、会話だけを行う。",
+    // Front-end voice persona. Keeps speech short and natural so turns never
+    // run long enough to be cut off mid-sentence.
+    instructions: voicePrompt(state),
     audio: { output: { voice: "marin" } },
-    delegation: { type: "client" },
+    // Responses delegation: OpenAI runs the backend model itself. Client
+    // delegation would stall the call, because this app answers on its own
+    // /api/analyze channel and never returns a delegation result.
+    delegation: {
+      type: "responses",
+      responses: {
+        model: process.env.OPENAI_TEXT_MODEL || "gpt-5.6-luna",
+        instructions: characterPrompt(state),
+        tool_choice: "none",
+        reasoning: { effort: "low" },
+        max_output_tokens: 700,
+      },
+    },
     store: false,
     input: [
       {
@@ -149,11 +166,20 @@ export function liveConfig(state: GameState) {
           {
             type: "input_text",
             text:
-              "確定した現在の記憶: " +
-              (allowedContext(state).join("。") || "まだない"),
+              "確定した現在の記憶: " + (known.join("。") || "まだない") + "。",
           },
         ],
       },
+      ...state.history.slice(-6).map((m) => ({
+        type: "message" as const,
+        role: m.role,
+        content: [
+          {
+            type: m.role === "user" ? ("input_text" as const) : ("output_text" as const),
+            text: m.content.slice(0, 600),
+          },
+        ],
+      })),
     ],
   };
 }

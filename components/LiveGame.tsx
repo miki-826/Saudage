@@ -21,10 +21,14 @@ import {
   Headphones,
   Sparkles,
   Home,
+  HelpCircle,
+  Keyboard,
+  Ear,
 } from "lucide-react";
 import {
   memories,
   focusMemory,
+  suggestionsFor,
   tone,
   type GameState,
   type VisualSignals,
@@ -33,7 +37,13 @@ import {
 import story from "@/story/story.json";
 import { Modal } from "./Modal";
 import { CameraTracker } from "./CameraTracker";
-import { LiveConnection } from "@/lib/client/live";
+import {
+  LiveConnection,
+  checkMicrophone,
+  micErrorMessage,
+  type LiveStatus,
+  type MicReason,
+} from "@/lib/client/live";
 
 type Config = { ai: boolean; cloud: boolean; accessCode: boolean };
 type Session = { token: string; state: GameState };
@@ -59,6 +69,70 @@ const defaults: Prefs = {
   code: "",
 };
 const saveKey = "live-save-v1";
+// The stall timer lives outside the component: reading the clock inside one is
+// flagged as impure even from an event handler.
+function markProgress(ref: { current: number }) {
+  ref.current = Date.now();
+}
+function stalledFor(ref: { current: number }) {
+  return Date.now() - ref.current;
+}
+const guideKey = "live-guide-v1";
+// Shown in full before the first conversation starts, so nothing about the
+// controls has to be discovered by trial and error.
+const GUIDE = [
+  {
+    heading: "これは、思い出させる物語です。",
+    lead: "彼女は記憶を失ったAIです。名前も、昨日も、自分が何をしていたのかも覚えていません。",
+    points: [
+      "職業や答えを当てるゲームではありません。正解を言っても、それだけでは記憶は戻りません。",
+      "あなたが「どこにいたのか」「何をしていたのか」「誰と関わっていたのか」「どう感じていたのか」を語ると、彼女の中の記憶が刺激されます。",
+      "5つの記憶がそろい、彼女が自分の言葉で「私はこういう存在だった」と語れたら、物語は終わります。",
+    ],
+  },
+  {
+    heading: "基本は、声で話しかけます。",
+    lead: "物語を始めると自動でマイクにつながり、彼女と声でそのまま会話できます。",
+    points: [
+      "ブラウザがマイクの許可を聞いてきたら「許可」を選んでください。",
+      "普通に話しかけてください。話し終えて少し黙ると、その言葉が彼女に届きます。",
+      "彼女が話している途中でも、かぶせて話して大丈夫です。声の波形が動いている間は、彼女が話しています。",
+      "「音声を終了」でいつでも切れます。もう一度「声で話す」で、すぐつなぎ直せます。",
+      "通信が切れたり、会話が長くなったときは、自動で静かにつなぎ直します。",
+    ],
+  },
+  {
+    heading: "マイクが使えないときは、文字で。",
+    lead: "マイクがない、許可できない、静かな場所にいる。そんなときも、同じ物語をそのまま進められます。",
+    points: [
+      "マイクが使えないと分かった時点で、選択肢とテキスト入力が自動で開きます。",
+      "3つの選択肢は、いま話しかけると効きやすい話題です。会話が進むと中身が入れ替わります。",
+      "自由入力では、情景や気持ちを自分の言葉で書くほど、記憶は深く動きます。",
+      "音声中でも「文字で送る」からいつでも書けます。書いた言葉には、彼女が声で応えます。",
+    ],
+  },
+  {
+    heading: "記憶は、少しずつ灯ります。",
+    lead: "ひとつの記憶には、何度かの手がかりが必要です。一度の発言では戻りません。",
+    points: [
+      "同じ言葉を繰り返しても進みません。言い方を変えて、別の角度から話してください。",
+      "抽象的な単語より、音・光・手の感触・そのときの気持ちのような具体が効きます。",
+      "30秒ほど進まないと、彼女がそっと手がかりをつぶやきます。3段階まで濃くなります。",
+      "記憶が戻ると演出が入り、「記憶のかけら」に絵と物語が追加されます。",
+    ],
+  },
+  {
+    heading: "画面と、保存のこと。",
+    lead: "覚えておくのは5つだけです。",
+    points: [
+      "右上「記憶のかけら」= 集めた記憶の一覧。左の肖像 = 彼女の心の段階。",
+      "画面下の「会話の記録」= 交わした言葉の振り返り。",
+      "会話するたびに、この端末へ自動保存されます。「つづきから」で再開できます。",
+      "設定から、BGM・音量・カメラ補助・アニメーションの調整、セーブの書き出しと読み込みができます。",
+      "カメラは完全に任意です。映像は端末内だけで処理し、送信しません。音声会話中の声と会話文はOpenAIへ送られます。",
+    ],
+  },
+];
 function Ornament() {
   return (
     <div className="ornament" aria-hidden="true">
@@ -90,9 +164,17 @@ export function LiveGame({
   const [session, setSession] = useState<Session | null>(null),
     [screen, setScreen] = useState<"home" | "game" | "ending">("home");
   const [modal, setModal] = useState<
-      "settings" | "memory" | "about" | "restart" | "history" | null
+      | "settings"
+      | "memory"
+      | "about"
+      | "restart"
+      | "history"
+      | "guide"
+      | null
     >(null),
     [selected, setSelected] = useState<string | null>(null);
+  const [guideStep, setGuideStep] = useState(0),
+    [guideSeen, setGuideSeen] = useState(false);
   const [prefs, setPrefs] = useState<Prefs>(defaults),
     [hasSave, setHasSave] = useState(false),
     [busy, setBusy] = useState(false),
@@ -102,14 +184,23 @@ export function LiveGame({
     [notice, setNotice] = useState(""),
     [error, setError] = useState(""),
     [unlock, setUnlock] = useState<Memory | null>(null);
-  const [voice, setVoice] = useState<"off" | "connecting" | "on">("off"),
+  const [voice, setVoice] = useState<LiveStatus>("idle"),
+    [speaking, setSpeaking] = useState(false),
     [cameraReady, setCameraReady] = useState(false),
     [hintLevel, setHintLevel] = useState(0);
+  // Voice is the default way to play; the typed panel appears when a
+  // microphone is unavailable, or whenever the player asks for it.
+  const [mic, setMic] = useState<{ reason: MicReason; message: string } | null>(
+    null,
+  );
+  const [showText, setShowText] = useState(false);
   const audio = useRef<HTMLAudioElement | null>(null),
     live = useRef<LiveConnection | null>(null),
     current = useRef<Session | null>(null),
     prefsRef = useRef(prefs);
   const locked = useRef(false),
+    spoken = useRef(""),
+    contextRef = useRef(""),
     signals = useRef<VisualSignals | null>(null),
     lastProgress = useRef(0),
     hintCount = useRef(0),
@@ -125,7 +216,9 @@ export function LiveGame({
   }, []);
   function stopVoice() {
     live.current?.stop();
-    setVoice("off");
+    live.current = null;
+    setVoice("idle");
+    setSpeaking(false);
   }
   function persist(data: Session) {
     current.current = data;
@@ -175,6 +268,7 @@ export function LiveGame({
             motion: stored.motion !== false,
             camera: false,
           });
+        setGuideSeen(localStorage.getItem(guideKey) === "1");
         const token = localStorage.getItem(saveKey);
         setHasSave(!!token);
         if (initialContinue && token) {
@@ -235,7 +329,7 @@ export function LiveGame({
       if (
         !s ||
         s.state.completed ||
-        Date.now() - lastProgress.current < 30000 ||
+        stalledFor(lastProgress) < 30000 ||
         hintCount.current >= 3
       )
         return;
@@ -244,17 +338,16 @@ export function LiveGame({
       live.current?.hint(hint);
       hintCount.current++;
       setHintLevel(hintCount.current);
-      lastProgress.current = Date.now();
+      markProgress(lastProgress);
     }, 1000);
     return () => clearInterval(interval);
   }, [screen, busy, unlock, modal]);
   useEffect(() => {
+    // Hiding the tab only mutes the microphone. Tearing the call down here is
+    // what made the conversation die whenever the player glanced away.
     const hide = () => {
-      if (document.hidden) {
-        live.current?.stop();
-        setVoice("off");
-        setPrefs((p) => ({ ...p, camera: false }));
-      }
+      live.current?.setMuted(document.hidden);
+      if (document.hidden) setPrefs((p) => ({ ...p, camera: false }));
     };
     document.addEventListener("visibilitychange", hide);
     return () => document.removeEventListener("visibilitychange", hide);
@@ -271,10 +364,20 @@ export function LiveGame({
       persist(data);
       setLine(story.opening);
       setScreen("game");
-      setModal(null);
       setHintLevel(0);
       hintCount.current = 0;
-      lastProgress.current = Date.now();
+      contextRef.current = "";
+      spoken.current = "";
+      markProgress(lastProgress);
+      // First-time players read the full guide before anything starts; the
+      // last page is what opens the microphone.
+      if (!guideSeen) {
+        setGuideStep(0);
+        setModal("guide");
+      } else {
+        setModal(null);
+        await connectVoice(data);
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -296,7 +399,9 @@ export function LiveGame({
       persist(data);
       setLine(data.state.history.at(-1)?.content || story.opening);
       setScreen(data.state.completed ? "ending" : "game");
-      lastProgress.current = Date.now();
+      contextRef.current = "";
+      markProgress(lastProgress);
+      if (!data.state.completed) await connectVoice(data);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -345,16 +450,24 @@ export function LiveGame({
           token: current.current.token,
           message: text,
           voice: isVoice,
+          // What she actually said, so history holds her real words.
+          spoken: isVoice ? spoken.current.slice(-1400) : undefined,
           signals: signals.current,
         },
         prefsRef.current.code,
       );
       persist(result);
+      contextRef.current = result.context;
+      live.current?.setToken(result.token);
       if (!isVoice || result.unlocked || result.state.completed)
         setLine(result.reply);
+      // Typed input during a live call is spoken back, so the two ways of
+      // talking to her stay one conversation.
+      if (!isVoice && live.current?.connected && !result.unlocked)
+        live.current.typed(text);
       setInput("");
       if (result.gain) {
-        lastProgress.current = Date.now();
+        markProgress(lastProgress);
         hintCount.current = 0;
         setHintLevel(0);
       }
@@ -385,36 +498,76 @@ export function LiveGame({
   useEffect(() => {
     processRef.current = process;
   });
+  /** Open the voice call. Falls back to the typed panel when the mic is out. */
+  async function connectVoice(session: Session) {
+    if (session.state.mode === "demo") {
+      setShowText(true);
+      return;
+    }
+    const check = await checkMicrophone();
+    if (!check.ok) {
+      // The inline notice beside the typed panel says this already.
+      setMic({ reason: check.reason, message: check.message });
+      setShowText(true);
+      return;
+    }
+    // Tear the old call down first: its close handler resets the status, which
+    // would otherwise land after this one and show "idle" while connecting.
+    live.current?.stop();
+    live.current = null;
+    setVoice("connecting");
+    setError("");
+    const connection = new LiveConnection({
+      onReady: () => {
+        setMic(null);
+        // A re-dialled call starts from the session config, so any context
+        // learned since then is re-applied here.
+        if (contextRef.current) connection.update(contextRef.current, null);
+      },
+      onInput: (t) => {
+        void processRef.current(t, true);
+      },
+      onOutput: (t) => {
+        spoken.current = t;
+        setLine(t);
+      },
+      onSpeaking: setSpeaking,
+      onStatus: setVoice,
+      onNotice: setNotice,
+      onError: setError,
+      onClosed: () => {
+        setVoice("idle");
+        setSpeaking(false);
+      },
+    });
+    live.current = connection;
+    try {
+      await connection.start(session.token, prefsRef.current.code);
+    } catch (e) {
+      const { reason, message } = micErrorMessage(e);
+      live.current = null;
+      setVoice("idle");
+      if (e instanceof Error && /NotAllowedError|NotFoundError|SecurityError|OverconstrainedError/.test(e.name)) {
+        setMic({ reason, message });
+      } else setError((e as Error).message || message);
+      setShowText(true);
+    }
+  }
   async function toggleVoice() {
-    if (voice !== "off") {
+    if (voice !== "idle") {
       stopVoice();
+      setShowText(true);
       return;
     }
     if (!session) return;
     if (session.state.mode === "demo") {
+      setShowText(true);
       setNotice(
         "体験モードはテキストで遊べます。API設定後、新しい物語から音声会話を始められます。",
       );
       return;
     }
-    setVoice("connecting");
-    setError("");
-    const connection = new LiveConnection({
-      onReady: () => setVoice("on"),
-      onInput: (t) => {
-        void processRef.current(t, true);
-      },
-      onOutput: setLine,
-      onError: setError,
-      onClosed: () => setVoice("off"),
-    });
-    live.current = connection;
-    try {
-      await connection.start(session.token, prefs.code);
-    } catch (e) {
-      setError((e as Error).message);
-      setVoice("off");
-    }
+    await connectVoice(session);
   }
   async function save() {
     if (!session || busy) return;
@@ -439,7 +592,7 @@ export function LiveGame({
       setScreen("ending");
     } else {
       live.current?.resumeAfterMemory();
-      live.current?.hint(line);
+      if (contextRef.current) live.current?.update(contextRef.current, null);
     }
   }
   function exportSave() {
@@ -473,9 +626,22 @@ export function LiveGame({
       setError((e as Error).message);
     }
   }
+  function finishGuide() {
+    setGuideSeen(true);
+    try {
+      localStorage.setItem(guideKey, "1");
+    } catch {
+      /* A blocked store only means the guide shows again next time. */
+    }
+    setModal(null);
+    const s = current.current;
+    if (s && !s.state.completed) void connectVoice(s);
+  }
   const state = session?.state,
     count = state?.memories.filter((m) => m.unlocked).length ?? 0,
-    focus = state ? focusMemory(state) : memories[0];
+    prompts = state ? suggestionsFor(state) : memories[0].suggestions;
+  const voiceLive = voice === "live",
+    voiceBusy = voice === "connecting" || voice === "reconnecting";
   const currentTone = state ? tone(state) : null;
   const detail = memories.find((m) => m.id === selected),
     detailState = state?.memories.find((m) => m.id === selected);
@@ -536,6 +702,16 @@ export function LiveGame({
             aria-label={prefs.sound ? "サウンドをオフ" : "サウンドをオン"}
           >
             {prefs.sound ? <Volume2 size={19} /> : <VolumeX size={19} />}
+          </button>
+          <button
+            className="icon-button"
+            aria-label="遊び方の説明"
+            onClick={() => {
+              setGuideStep(0);
+              setModal("guide");
+            }}
+          >
+            <HelpCircle size={19} />
           </button>
           <button
             className="icon-button"
@@ -651,7 +827,13 @@ export function LiveGame({
             <span className="mode-pill">
               <i className="status-dot" />
               {state.mode === "demo" ? "体験モード" : "AI会話"}
-              {voice === "on" ? " · 音声接続中" : ""}
+              {voiceLive
+                ? " · 音声接続中"
+                : voiceBusy
+                  ? " · 接続中"
+                  : state.mode === "live"
+                    ? " · テキスト"
+                    : ""}
             </span>
           </div>
           <div className="conversation-layout">
@@ -683,11 +865,17 @@ export function LiveGame({
               <div className="conversation-heading">
                 <span>
                   <i className="status-dot" />
-                  {busy
-                    ? "記憶をたどっています"
-                    : voice === "on"
-                      ? "あなたの声を聴いています"
-                      : "あなたの言葉を待っています"}
+                  {voiceBusy
+                    ? voice === "reconnecting"
+                      ? "音声をつなぎ直しています"
+                      : "音声をつないでいます"
+                    : speaking
+                      ? "彼女が話しています"
+                      : busy
+                        ? "記憶をたどっています"
+                        : voiceLive
+                          ? "あなたの声を聴いています"
+                          : "あなたの言葉を待っています"}
                 </span>
                 <button
                   onClick={() => setModal("history")}
@@ -708,88 +896,142 @@ export function LiveGame({
                 </span>
               </div>
               <div className="reply-area">
-                <div className="reply-label">
-                  <Feather size={14} />
-                  <span>言葉を、届ける</span>
-                  <span className="hairline" />
-                </div>
-                <div className="suggestions">
-                  {focus.suggestions.map((text, i) => (
+                {state.mode === "live" && (
+                  <div className="voice-primary">
                     <button
-                      key={text}
-                      disabled={busy || voice !== "off"}
-                      onClick={() => void process(text)}
+                      className={`mic-button ${voiceLive ? "listening" : ""} ${speaking ? "hearing" : ""}`}
+                      onClick={() => void toggleVoice()}
+                      disabled={voiceBusy}
                     >
-                      <span className="suggestion-number">0{i + 1}</span>
-                      <span>{text}</span>
-                      <ChevronRight size={17} />
-                    </button>
-                  ))}
-                </div>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void process(input);
-                  }}
-                  className="message-form"
-                >
-                  <Feather size={17} />
-                  <input
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    disabled={busy || voice !== "off"}
-                    maxLength={1500}
-                    aria-label="彼女に届けるメッセージ"
-                    placeholder="あなたの言葉で、話しかけてみて…"
-                  />
-                  <button
-                    disabled={busy || !input.trim() || voice !== "off"}
-                    aria-label="メッセージを送信"
-                  >
-                    <Send size={19} />
-                  </button>
-                </form>
-                <div className="voice-controls">
-                  <button
-                    className={`mic-button ${voice === "on" ? "listening" : ""}`}
-                    onClick={() => void toggleVoice()}
-                    disabled={busy || voice === "connecting"}
-                  >
-                    {voice === "on" ? <MicOff size={18} /> : <Mic size={18} />}
-                    <span>
-                      {voice === "connecting"
-                        ? "接続しています…"
-                        : voice === "on"
-                          ? "音声会話を終了"
-                          : "声で話しかける"}
-                    </span>
-                    {voice === "on" && (
-                      <span className="wave-bars">
-                        {[1, 2, 3, 4, 5].map((i) => (
-                          <i key={i} />
-                        ))}
+                      {voiceLive ? <MicOff size={19} /> : <Mic size={19} />}
+                      <span>
+                        {voice === "connecting"
+                          ? "マイクにつないでいます…"
+                          : voice === "reconnecting"
+                            ? "つなぎ直しています…"
+                            : voiceLive
+                              ? "音声会話を終了"
+                              : mic
+                                ? "もう一度マイクを試す"
+                                : "声で話しかける"}
+                        <small>
+                          {voiceLive
+                            ? speaking
+                              ? "彼女が話しています"
+                              : "そのまま話しかけてください"
+                            : mic
+                              ? "いまは文字で進められます"
+                              : "基本はこちら。話し終えると届きます"}
+                        </small>
                       </span>
-                    )}
-                  </button>
-                  <button
-                    className={`camera-button ${prefs.camera ? "enabled" : ""}`}
-                    aria-label={
-                      prefs.camera ? "カメラ補助をオフ" : "カメラ補助をオン"
-                    }
-                    onClick={() =>
-                      setPrefs((p) => ({ ...p, camera: !p.camera }))
-                    }
-                  >
-                    <Camera size={18} />
+                      {voiceLive && (
+                        <span className="wave-bars">
+                          {[1, 2, 3, 4, 5].map((i) => (
+                            <i key={i} />
+                          ))}
+                        </span>
+                      )}
+                    </button>
+                    <div className="voice-side">
+                      <button
+                        className={`camera-button ${showText ? "enabled" : ""}`}
+                        onClick={() => setShowText((v) => !v)}
+                        aria-expanded={showText || !voiceLive}
+                      >
+                        <Keyboard size={17} />
+                        <span>
+                          {showText || !voiceLive ? "文字を隠す" : "文字で送る"}
+                        </span>
+                      </button>
+                      <button
+                        className={`camera-button ${prefs.camera ? "enabled" : ""}`}
+                        aria-label={
+                          prefs.camera ? "カメラ補助をオフ" : "カメラ補助をオン"
+                        }
+                        onClick={() =>
+                          setPrefs((p) => ({ ...p, camera: !p.camera }))
+                        }
+                      >
+                        <Camera size={17} />
+                        <span>
+                          {prefs.camera
+                            ? cameraReady
+                              ? "補助中"
+                              : "準備中"
+                            : "カメラ任意"}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {mic && (
+                  <p className="mic-fallback" role="status">
+                    <Ear size={15} />
                     <span>
-                      {prefs.camera
-                        ? cameraReady
-                          ? "補助中"
-                          : "準備中"
-                        : "カメラ任意"}
+                      {mic.message}
+                      {mic.reason === "denied" &&
+                        " ブラウザのアドレスバーのマイク設定から許可すると、声で話せます。"}
                     </span>
-                  </button>
-                </div>
+                  </p>
+                )}
+                {(showText || !voiceLive) && (
+                  <div className="text-panel">
+                    <div className="reply-label">
+                      <Feather size={14} />
+                      <span>言葉を、届ける</span>
+                      <span className="hairline" />
+                    </div>
+                    <div className="suggestions">
+                      {prompts.map((text, i) => (
+                        <button
+                          key={text}
+                          disabled={busy}
+                          onClick={() => void process(text)}
+                        >
+                          <span className="suggestion-number">0{i + 1}</span>
+                          <span>{text}</span>
+                          <ChevronRight size={17} />
+                        </button>
+                      ))}
+                    </div>
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void process(input);
+                      }}
+                      className="message-form"
+                    >
+                      <Feather size={17} />
+                      <input
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        disabled={busy}
+                        maxLength={1500}
+                        aria-label="彼女に届けるメッセージ"
+                        placeholder="あなたの言葉で、話しかけてみて…"
+                      />
+                      <button
+                        disabled={busy || !input.trim()}
+                        aria-label="メッセージを送信"
+                      >
+                        <Send size={19} />
+                      </button>
+                    </form>
+                  </div>
+                )}
+                {state.mode === "demo" && (
+                  <div className="voice-side demo-side">
+                    <button
+                      className={`camera-button ${prefs.camera ? "enabled" : ""}`}
+                      onClick={() =>
+                        setPrefs((p) => ({ ...p, camera: !p.camera }))
+                      }
+                    >
+                      <Camera size={17} />
+                      <span>{prefs.camera ? "補助中" : "カメラ任意"}</span>
+                    </button>
+                  </div>
+                )}
                 <p className="conversation-tip">
                   正解を急がず、情景や気持ちを一緒にたどってみてください。
                 </p>
@@ -886,6 +1128,62 @@ export function LiveGame({
             ×
           </button>
         </div>
+      )}
+
+      {modal === "guide" && (
+        <Modal
+          title="はじめに、遊び方を全部。"
+          onClose={() => (guideSeen ? setModal(null) : finishGuide())}
+          wide
+        >
+          <div className="guide">
+            <div className="guide-steps" aria-hidden="true">
+              {GUIDE.map((g, i) => (
+                <i key={g.heading} className={i <= guideStep ? "lit" : ""} />
+              ))}
+            </div>
+            <span className="eyebrow">
+              STEP {guideStep + 1} / {GUIDE.length}
+            </span>
+            <h3>{GUIDE[guideStep].heading}</h3>
+            <p className="guide-lead">{GUIDE[guideStep].lead}</p>
+            <ul className="guide-list">
+              {GUIDE[guideStep].points.map((point) => (
+                <li key={point}>{point}</li>
+              ))}
+            </ul>
+            <div className="guide-nav">
+              <button
+                className="text-button"
+                disabled={guideStep === 0}
+                onClick={() => setGuideStep((n) => Math.max(0, n - 1))}
+              >
+                もどる
+              </button>
+              {guideStep < GUIDE.length - 1 ? (
+                <>
+                  <button className="text-button" onClick={finishGuide}>
+                    説明を飛ばす
+                  </button>
+                  <button
+                    className="gold-button"
+                    onClick={() => setGuideStep((n) => n + 1)}
+                  >
+                    つぎへ <ArrowRight size={16} />
+                  </button>
+                </>
+              ) : (
+                <button className="gold-button" onClick={finishGuide}>
+                  わかりました。彼女に会う
+                  <ArrowRight size={17} />
+                </button>
+              )}
+            </div>
+            <p className="small-note">
+              この説明は、画面右上の「?」からいつでも読み直せます。
+            </p>
+          </div>
+        </Modal>
       )}
 
       {modal === "settings" && (
@@ -1014,26 +1312,43 @@ export function LiveGame({
           <div className="howto">
             <div>
               <span>01</span>
-              <h3>まずは、話しかける。</h3>
+              <h3>まずは、声で話しかける。</h3>
               <p>
-                声でも文字でも、あなたの言葉で。選択肢から話題を選んでも大丈夫です。
+                物語を始めると、そのままマイクにつながります。話し終えて少し黙ると、その言葉が彼女に届きます。
               </p>
             </div>
             <div>
               <span>02</span>
+              <h3>マイクがなくても、大丈夫。</h3>
+              <p>
+                マイクが使えないときは、選択肢とテキスト入力が自動で開きます。音声中でも「文字で送る」からいつでも書けます。
+              </p>
+            </div>
+            <div>
+              <span>03</span>
               <h3>情景を、一緒にたどる。</h3>
               <p>
                 何をしていたのか。誰といたのか。どう感じたのか。会話を重ねると記憶の断片がつながります。
               </p>
             </div>
             <div>
-              <span>03</span>
+              <span>04</span>
               <h3>ひとつの心に、出会う。</h3>
               <p>
                 答えを当てることがゴールではありません。彼女が「私」を語れるまで、そばにいてください。
               </p>
             </div>
           </div>
+          <button
+            className="outline-button"
+            onClick={() => {
+              setGuideStep(0);
+              setModal("guide");
+            }}
+          >
+            <HelpCircle size={15} />
+            操作説明をはじめから読む
+          </button>
           <p className="privacy-note">
             彼女の音声はAIが生成します。音声会話中の音声・会話文はOpenAIへ送信されます。カメラは任意で、映像は端末内で処理します。体験モードでは外部AIを呼ばず、用意した台詞とキーワード判定で遊べます。
           </p>

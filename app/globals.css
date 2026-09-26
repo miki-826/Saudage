@@ -751,6 +751,29 @@ input {
   justify-content: space-between;
   gap: 12px;
 }
+/* Voice is the primary way to play, so its control leads the reply area. */
+.voice-primary {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.voice-primary .mic-button {
+  flex: 1 1 260px;
+  justify-content: flex-start;
+  padding: 15px 20px;
+}
+.voice-side {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 9px;
+}
+.demo-side {
+  flex-direction: row;
+  margin-top: 4px;
+}
 .mic-button {
   display: flex;
   align-items: center;
@@ -761,10 +784,110 @@ input {
   letter-spacing: 1px;
   color: #d9be93;
   background: #28231d55;
+  text-align: left;
+}
+.mic-button > span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mic-button small {
+  font: 9px/1.5 var(--sans);
+  letter-spacing: 0.6px;
+  color: #a9a79f;
 }
 .mic-button.listening {
   border-color: var(--gold);
   box-shadow: 0 0 17px #dca35525;
+}
+.mic-button.hearing {
+  background: #322a2055;
+  box-shadow: 0 0 25px #dca35540;
+}
+/* Shown when the microphone is unavailable, above the typed fallback. */
+.mic-fallback {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--gold);
+  background: #2a231a44;
+  font: 10px/1.9 var(--sans);
+  color: #cbbfa9;
+}
+.mic-fallback svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--gold);
+}
+.text-panel {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.text-panel .reply-label {
+  margin-top: 0;
+}
+/* Opening walkthrough: one short page per step. */
+.guide-steps {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+.guide-steps i {
+  height: 2px;
+  flex: 1;
+  background: #4a453c;
+  transition: background 0.4s;
+}
+.guide-steps i.lit {
+  background: var(--gold);
+}
+.guide h3 {
+  margin: 9px 0 12px;
+  font-size: 19px;
+  font-weight: 400;
+  letter-spacing: 1.4px;
+}
+.guide-lead {
+  font-size: 12px;
+  line-height: 2;
+  color: #cdc6b8;
+}
+.guide-list {
+  margin: 18px 0 24px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 13px;
+}
+.guide-list li {
+  position: relative;
+  padding-left: 20px;
+  font: 11.5px/1.95 var(--sans);
+  color: #b4b2aa;
+}
+.guide-list li::before {
+  content: "✧";
+  position: absolute;
+  left: 0;
+  top: 1px;
+  color: var(--gold);
+  font-size: 10px;
+}
+.guide-nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.guide-nav .text-button:first-child {
+  margin-right: auto;
 }
 .camera-button {
   display: flex;
@@ -1521,6 +1644,23 @@ input[type="range"] {
   }
   .site-header {
     height: 100px;
+  }
+}
+@media (max-width: 760px) {
+  .voice-primary .mic-button {
+    flex: 1 1 100%;
+  }
+  .voice-side {
+    flex-direction: row;
+    width: 100%;
+    justify-content: space-between;
+  }
+  .guide-nav {
+    justify-content: stretch;
+  }
+  .guide-nav .gold-button {
+    width: 100%;
+    justify-content: center;
   }
 }
 @media (max-width: 760px) {
